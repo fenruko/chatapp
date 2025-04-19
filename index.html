@@ -4,17 +4,22 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ChatApp</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Use a specific version of Tailwind CSS to avoid the production warning -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.22.9/babel.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.44.4/dist/umd/supabase.min.js"></script>
+    <!-- Load Supabase properly with global variable -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.44.4/dist/umd/supabase.min.js" crossorigin="anonymous"></script>
 </head>
 <body class="bg-gray-900 text-white">
     <div id="root"></div>
     <script type="text/babel">
-        const { createClient } = Supabase;
-        const supabase = createClient('https://qawziigyynrudasylawl.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFhd3ppaWd5eW5ydWRhc3lsYXdsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDUwOTEyNjksImV4cCI6MjA2MDY2NzI2OX0.Y77hvUew6YfKvW-zQVLZAqk2cv1dJ-zUHHYVoqOVSCE');
+        // Access the global Supabase object properly
+        const supabase = supabaseClient.createClient(
+            'https://qawziigyynrudasylawl.supabase.co', 
+            'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFhd3ppaWd5eW5ydWRhc3lsYXdsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDUwOTEyNjksImV4cCI6MjA2MDY2NzI2OX0.Y77hvUew6YfKvW-zQVLZAqk2cv1dJ-zUHHYVoqOVSCE'
+        );
 
         const App = () => {
             const [user, setUser] = React.useState(null);
@@ -102,51 +107,66 @@
             }, [selectedFriend, user]);
 
             const fetchFriends = async (userId) => {
-                const { data } = await supabase
-                    .from('friend_requests')
-                    .select('sender_id, receiver_id')
-                    .eq('status', 'accepted')
-                    .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`);
-                
-                if (data && data.length > 0) {
-                    const friendIds = data.map(req => req.sender_id === userId ? req.receiver_id : req.sender_id);
-                    const { data: friendsData } = await supabase
-                        .from('users')
-                        .select('*')
-                        .in('id', friendIds);
+                try {
+                    const { data } = await supabase
+                        .from('friend_requests')
+                        .select('sender_id, receiver_id')
+                        .eq('status', 'accepted')
+                        .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`);
                     
-                    if (friendsData) {
-                        setFriends(friendsData);
+                    if (data && data.length > 0) {
+                        const friendIds = data.map(req => req.sender_id === userId ? req.receiver_id : req.sender_id);
+                        const { data: friendsData } = await supabase
+                            .from('users')
+                            .select('*')
+                            .in('id', friendIds);
+                        
+                        if (friendsData) {
+                            setFriends(friendsData);
+                        }
+                    } else {
+                        setFriends([]);
                     }
-                } else {
+                } catch (error) {
+                    console.error("Error fetching friends:", error);
                     setFriends([]);
                 }
             };
 
             const fetchFriendRequests = async (userId) => {
-                const { data } = await supabase
-                    .from('friend_requests')
-                    .select('*, sender:users!sender_id(*), receiver:users!receiver_id(*)')
-                    .eq('receiver_id', userId)
-                    .eq('status', 'pending');
-                
-                setFriendRequests(data || []);
+                try {
+                    const { data } = await supabase
+                        .from('friend_requests')
+                        .select('*, sender:users!sender_id(*), receiver:users!receiver_id(*)')
+                        .eq('receiver_id', userId)
+                        .eq('status', 'pending');
+                    
+                    setFriendRequests(data || []);
+                } catch (error) {
+                    console.error("Error fetching friend requests:", error);
+                    setFriendRequests([]);
+                }
             };
 
             const fetchMessages = async (userId, friendId) => {
-                const { data } = await supabase
-                    .from('messages')
-                    .select('*')
-                    .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
-                    .or(`sender_id.eq.${friendId},receiver_id.eq.${friendId}`)
-                    .order('created_at', { ascending: true });
-                
-                if (data) {
-                    setMessages(data.filter(msg => 
-                        (msg.sender_id === userId && msg.receiver_id === friendId) ||
-                        (msg.sender_id === friendId && msg.receiver_id === userId)
-                    ));
-                } else {
+                try {
+                    const { data } = await supabase
+                        .from('messages')
+                        .select('*')
+                        .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
+                        .or(`sender_id.eq.${friendId},receiver_id.eq.${friendId}`)
+                        .order('created_at', { ascending: true });
+                    
+                    if (data) {
+                        setMessages(data.filter(msg => 
+                            (msg.sender_id === userId && msg.receiver_id === friendId) ||
+                            (msg.sender_id === friendId && msg.receiver_id === userId)
+                        ));
+                    } else {
+                        setMessages([]);
+                    }
+                } catch (error) {
+                    console.error("Error fetching messages:", error);
                     setMessages([]);
                 }
             };
@@ -157,25 +177,30 @@
                     return;
                 }
 
-                const { data, error } = await supabase.auth.signUp({
-                    email,
-                    password,
-                    options: { data: { username } }
-                });
-                
-                if (error) {
-                    alert(error.message);
-                    return;
-                }
-                
-                if (data.user) {
-                    await supabase.from('users').insert({
-                        id: data.user.id,
+                try {
+                    const { data, error } = await supabase.auth.signUp({
                         email,
-                        username
+                        password,
+                        options: { data: { username } }
                     });
-                    setView('login');
-                    alert('Signup successful! Please log in.');
+                    
+                    if (error) {
+                        alert(error.message);
+                        return;
+                    }
+                    
+                    if (data.user) {
+                        await supabase.from('users').insert({
+                            id: data.user.id,
+                            email,
+                            username
+                        });
+                        setView('login');
+                        alert('Signup successful! Please log in.');
+                    }
+                } catch (error) {
+                    console.error("Error during signup:", error);
+                    alert('An error occurred during signup. Please try again.');
                 }
             };
 
@@ -185,14 +210,30 @@
                     return;
                 }
 
-                const { error } = await supabase.auth.signInWithPassword({ email, password });
-                if (error) alert(error.message);
+                try {
+                    const { error } = await supabase.auth.signInWithPassword({ 
+                        email, 
+                        password 
+                    });
+                    
+                    if (error) {
+                        alert(error.message);
+                    }
+                } catch (error) {
+                    console.error("Error during login:", error);
+                    alert('An error occurred during login. Please try again.');
+                }
             };
 
             const handleLogout = async () => {
-                await supabase.auth.signOut();
-                setUser(null);
-                setView('login');
+                try {
+                    await supabase.auth.signOut();
+                    setUser(null);
+                    setView('login');
+                } catch (error) {
+                    console.error("Error during logout:", error);
+                    alert('An error occurred during logout. Please try again.');
+                }
             };
 
             const handleSendFriendRequest = async () => {
@@ -201,54 +242,65 @@
                     return;
                 }
 
-                const { data: friend } = await supabase
-                    .from('users')
-                    .select('id')
-                    .eq('username', friendUsername)
-                    .single();
-                
-                if (!friend) {
-                    alert('User not found');
-                    return;
-                }
+                try {
+                    const { data: friend, error: friendError } = await supabase
+                        .from('users')
+                        .select('id')
+                        .eq('username', friendUsername)
+                        .single();
+                    
+                    if (friendError || !friend) {
+                        alert('User not found');
+                        return;
+                    }
 
-                // Check if we're trying to add ourselves
-                if (friend.id === user.id) {
-                    alert('You cannot add yourself as a friend');
-                    return;
-                }
+                    // Check if we're trying to add ourselves
+                    if (friend.id === user.id) {
+                        alert('You cannot add yourself as a friend');
+                        return;
+                    }
 
-                // Check if request already exists
-                const { data: existingRequest } = await supabase
-                    .from('friend_requests')
-                    .select('*')
-                    .or(`and(sender_id.eq.${user.id},receiver_id.eq.${friend.id}),and(sender_id.eq.${friend.id},receiver_id.eq.${user.id})`)
-                    .single();
+                    // Check if request already exists
+                    const { data: existingRequest } = await supabase
+                        .from('friend_requests')
+                        .select('*')
+                        .or(`and(sender_id.eq.${user.id},receiver_id.eq.${friend.id}),and(sender_id.eq.${friend.id},receiver_id.eq.${user.id})`)
+                        .single();
 
-                if (existingRequest) {
-                    alert('A friend request already exists between you and this user');
-                    return;
-                }
+                    if (existingRequest) {
+                        alert('A friend request already exists between you and this user');
+                        return;
+                    }
 
-                const { error } = await supabase
-                    .from('friend_requests')
-                    .insert({ sender_id: user.id, receiver_id: friend.id });
-                
-                if (error) alert(error.message);
-                else {
-                    alert('Friend request sent!');
-                    setFriendUsername('');
+                    const { error } = await supabase
+                        .from('friend_requests')
+                        .insert({ sender_id: user.id, receiver_id: friend.id });
+                    
+                    if (error) {
+                        alert(error.message);
+                    } else {
+                        alert('Friend request sent!');
+                        setFriendUsername('');
+                    }
+                } catch (error) {
+                    console.error("Error sending friend request:", error);
+                    alert('An error occurred while sending the friend request. Please try again.');
                 }
             };
 
             const handleFriendRequestAction = async (requestId, action) => {
-                await supabase
-                    .from('friend_requests')
-                    .update({ status: action })
-                    .eq('id', requestId);
-                
-                fetchFriendRequests(user.id);
-                if (action === 'accepted') fetchFriends(user.id);
+                try {
+                    await supabase
+                        .from('friend_requests')
+                        .update({ status: action })
+                        .eq('id', requestId);
+                    
+                    fetchFriendRequests(user.id);
+                    if (action === 'accepted') fetchFriends(user.id);
+                } catch (error) {
+                    console.error(`Error ${action === 'accepted' ? 'accepting' : 'rejecting'} friend request:`, error);
+                    alert(`An error occurred while ${action === 'accepted' ? 'accepting' : 'rejecting'} the friend request. Please try again.`);
+                }
             };
 
             const handleUpdateProfile = async () => {
@@ -257,72 +309,82 @@
                     return;
                 }
 
-                let pfpUrl = user.pfp_url || '';
+                try {
+                    let pfpUrl = user.pfp_url || '';
 
-                if (pfpFile) {
-                    const fileExt = pfpFile.name.split('.').pop();
-                    const fileName = `${user.id}-${Date.now()}.${fileExt}`;
-                    
-                    const { data, error: uploadError } = await supabase.storage
-                        .from('pfps')
-                        .upload(fileName, pfpFile);
-                    
-                    if (uploadError) {
-                        alert(`Error uploading file: ${uploadError.message}`);
-                    } else if (data) {
-                        pfpUrl = supabase.storage.from('pfps').getPublicUrl(fileName).data.publicUrl;
+                    if (pfpFile) {
+                        const fileExt = pfpFile.name.split('.').pop();
+                        const fileName = `${user.id}-${Date.now()}.${fileExt}`;
+                        
+                        const { data, error: uploadError } = await supabase.storage
+                            .from('pfps')
+                            .upload(fileName, pfpFile);
+                        
+                        if (uploadError) {
+                            alert(`Error uploading file: ${uploadError.message}`);
+                        } else if (data) {
+                            pfpUrl = supabase.storage.from('pfps').getPublicUrl(fileName).data.publicUrl;
+                        }
                     }
-                }
 
-                const { error } = await supabase
-                    .from('users')
-                    .update({ 
-                        username, 
-                        pfp_url: pfpUrl,
-                        background_url: backgroundUrl || user.background_url || ''
-                    })
-                    .eq('id', user.id);
-                
-                if (error) {
-                    alert(`Error updating profile: ${error.message}`);
-                } else {
-                    setUser({ 
-                        ...user, 
-                        username, 
-                        pfp_url: pfpUrl,
-                        background_url: backgroundUrl || user.background_url || ''
-                    });
-                    setPfpFile(null);
-                    setView('chat');
-                    alert('Profile updated successfully!');
+                    const { error } = await supabase
+                        .from('users')
+                        .update({ 
+                            username, 
+                            pfp_url: pfpUrl,
+                            background_url: backgroundUrl || user.background_url || ''
+                        })
+                        .eq('id', user.id);
+                    
+                    if (error) {
+                        alert(`Error updating profile: ${error.message}`);
+                    } else {
+                        setUser({ 
+                            ...user, 
+                            username, 
+                            pfp_url: pfpUrl,
+                            background_url: backgroundUrl || user.background_url || ''
+                        });
+                        setPfpFile(null);
+                        setView('chat');
+                        alert('Profile updated successfully!');
+                    }
+                } catch (error) {
+                    console.error("Error updating profile:", error);
+                    alert('An error occurred while updating your profile. Please try again.');
                 }
             };
 
             const handleSendMessage = async () => {
                 if (!messageContent.trim() || !selectedFriend) return;
                 
-                const { data, error } = await supabase
-                    .from('messages')
-                    .insert({ 
-                        sender_id: user.id, 
-                        receiver_id: selectedFriend.id, 
-                        content: messageContent 
-                    });
-                
-                if (error) {
-                    alert(`Error sending message: ${error.message}`);
-                } else {
-                    // Optimistically add the message to the UI
-                    const newMessage = {
-                        id: Date.now().toString(), // Temporary ID
-                        sender_id: user.id,
-                        receiver_id: selectedFriend.id,
-                        content: messageContent,
-                        created_at: new Date().toISOString()
-                    };
+                try {
+                    const { data, error } = await supabase
+                        .from('messages')
+                        .insert({ 
+                            sender_id: user.id, 
+                            receiver_id: selectedFriend.id, 
+                            content: messageContent 
+                        });
                     
-                    setMessages(prev => [...prev, newMessage]);
-                    setMessageContent('');
+                    if (error) {
+                        alert(`Error sending message: ${error.message}`);
+                    } else {
+                        // Optimistically add the message to the UI
+                        const newMessage = {
+                            id: Date.now().toString(), // Temporary ID
+                            sender_id: user.id,
+                            receiver_id: selectedFriend.id,
+                            content: messageContent,
+                            created_at: new Date().toISOString()
+                        };
+                        
+                        setMessages(prev => [...prev, newMessage]);
+                        setMessageContent('');
+                    }
+                } catch (error) {
+                    console.error("Error sending message:", error);
+                    alert('An error occurred while sending your message. Please try again.');
                 }
             };
 
