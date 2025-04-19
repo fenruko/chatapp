@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChatApp</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.22.9/Babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.44.4/dist/umd/supabase.min.js"></script>
+</head>
+<body class="bg-gray-900 text-white">
+    <div id="root"></div>
+    <script type="text/babel">
+        const { createClient } = Supabase;
+        const supabase = createClient('https://qawziigyynrudasylawl.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFhd3ppaWd5eW5ydWRhc3lsYXdsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDUwOTEyNjksImV4cCI6MjA2MDY2NzI2OX0.Y77hvUew6YfKvW-zQVLZAqk2cv1dJ-zUHHYVoqOVSCE');
+
+        const App = () => {
+            const [user, setUser] = React.useState(null);
+            const [view, setView] = React.useState('login');
+            const [email, setEmail] = React.useState('');
+            const [password, setPassword] = React.useState('');
+            const [username, setUsername] = React.useState('');
+            const [friendUsername, setFriendUsername] = React.useState('');
+            const [pfpFile, setPfpFile] = React.useState(null);
+            const [backgroundUrl, setBackgroundUrl] = React.useState('');
+            const [friends, setFriends] = React.useState([]);
+            const [friendRequests, setFriendRequests] = React.useState([]);
+            const [selectedFriend, setSelectedFriend] = React.useState(null);
+            const [messages, setMessages] = React.useState([]);
+            const [messageContent, setMessageContent] = React.useState('');
+
+            React.useEffect(() => {
+                const getSession = async () => {
+                    const { data: { session } } = await supabase.auth.getSession();
+                    if (session) {
+                        const { data: userData } = await supabase
+                            .from('users')
+                            .select('*')
+                            .eq('id', session.user.id)
+                            .single();
+                        setUser(userData);
+                        fetchFriends(session.user.id);
+                        fetchFriendRequests(session.user.id);
+                    }
+                };
+                getSession();
+
+                const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+                    if (session) {
+                        getSession();
+                    } else {
+                        setUser(null);
+                        setView('login');
+                    }
+                });
+
+                return () => authListener.subscription.unsubscribe();
+            }, []);
+
+            React.useEffect(() => {
+                if (user) {
+                    const channel = supabase
+                        .channel('friend_requests')
+                        .on('postgres_changes', { event: '*', schema: 'public', table: 'friend_requests', filter: `receiver_id=eq.${user.id}` }, (payload) => {
+                            fetchFriendRequests(user.id);
+                        })
+                        .on('postgres_changes', { event: '*', schema: 'public', table: 'friend_requests', filter: `sender_id=eq.${user.id}` }, (payload) => {
+                            fetchFriendRequests(user.id);
+                        })
+                        .subscribe();
+
+                    return () => supabase.removeChannel(channel);
+                }
+            }, [user]);
+
+            React.useEffect(() => {
+                if (selectedFriend) {
+                    fetchMessages(user.id, selectedFriend.id);
+                    const channel = supabase
+                        .channel('messages')
+                        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `receiver_id=eq.${user.id}` }, (payload) => {
+                            if (payload.new.sender_id === selectedFriend.id) {
+                                setMessages((prev) => [...prev, payload.new]);
+                            }
+                        })
+                        .subscribe();
+
+                    return () => supabase.removeChannel(channel);
+                }
+            }, [selectedFriend]);
+
+            const fetchFriends = async (userId) => {
+                const { data } = await supabase
+                    .from('friend_requests')
+                    .select('sender_id, receiver_id')
+                    .eq('status', 'accepted')
+                    .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`);
+                const friendIds = data.map(req => req.sender_id === userId ? req.receiver_id : req.sender_id);
+                const { data: friendsData } = await supabase
+                    .from('users')
+                    .select('*')
+                    .in('id', friendIds);
+                setFriends(friendsData);
+            };
+
+            const fetchFriendRequests = async (userId) => {
+                const { data } = await supabase
+                    .from('friend_requests')
+                    .select('*, sender:users!sender_id(*), receiver:users!receiver_id(*)')
+                    .eq('receiver_id', userId)
+                    .eq('status', 'pending');
+                setFriendRequests(data);
+            };
+
+            const fetchMessages = async (userId, friendId) => {
+                const { data } = await supabase
+                    .from('messages')
+                    .select('*')
+                    .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
+                    .or(`sender_id.eq.${friendId},receiver_id.eq.${friendId}`)
+                    .order('created_at', { ascending: true });
+                setMessages(data.filter(msg => 
+                    (msg.sender_id === userId && msg.receiver_id === friendId) ||
+                    (msg.sender_id === friendId && msg.receiver_id === userId)
+                ));
+            };
+
+            const handleSignup = async () => {
+                const { data, error } = await supabase.auth.signUp({
+                    email,
+                    password,
+                    options: { data: { username } }
+                });
+                if (error) {
+                    alert(error.message);
+                    return;
+                }
+                await supabase.from('users').insert({
+                    id: data.user.id,
+                    email,
+                    username
+                });
+                setView('login');
+            };
+
+            const handleLogin = async () => {
+                const { error } = await supabase.auth.signInWithPassword({ email, password });
+                if (error) alert(error.message);
+            };
+
+            const handleLogout = async () => {
+                await supabase.auth.signOut();
+            };
+
+            const handleSendFriendRequest = async () => {
+                const { data: friend } = await supabase
+                    .from('users')
+                    .select('id')
+                    .eq('username', friendUsername)
+                    .single();
+                if (!friend) {
+                    alert('User not found');
+                    return;
+                }
+                const { error } = await supabase
+                    .from('friend_requests')
+                    .insert({ sender_id: user.id, receiver_id: friend.id });
+                if (error) alert(error.message);
+                else setFriendUsername('');
+            };
+
+            const handleFriendRequestAction = async (requestId, action) => {
+                await supabase
+                    .from('friend_requests')
+                    .update({ status: action })
+                    .eq('id', requestId);
+                fetchFriendRequests(user.id);
+                if (action === 'accepted') fetchFriends(user.id);
+            };
+
+            const handleUpdateProfile = async () => {
+                let pfpUrl = user.pfp_url??
+
+                    if (pfpFile) {
+                        const { data, error: uploadError } = await supabase.storage
+                            .from('pfps')
+                            .upload(`${user.id}/${pfpFile.name}`, pfpFile);
+                        if (!uploadError) {
+                            pfpUrl = supabase.storage.from('pfps').getPublicUrl(`${user.id}/${pfpFile.name}`).data.publicUrl;
+                        }
+                    }
+
+                    const { error } = await supabase
+                        .from('users')
+                        .update({ username, pfp_url: pfpUrl || user.pfp_url, background_url: backgroundUrl || user.background_url })
+                        .eq('id', user.id);
+                    if (error) alert(error.message);
+                    else {
+                        setUser({ ...user, username, pfp_url: pfpUrl || user.pfp_url, background_url: backgroundUrl || user.background_url });
+                        setPfpFile(null);
+                    }
+                };
+
+                const handleSendMessage = async () => {
+                    if (!messageContent.trim()) return;
+                    const { error } = await supabase
+                        .from('messages')
+                        .insert({ sender_id: user.id, receiver_id: selectedFriend.id, content: messageContent });
+                    if (error) alert(error.message);
+                    else {
+                        setMessages([...messages, {
+                            sender_id: user.id,
+                            receiver_id: selectedFriend.id,
+                            content: messageContent,
+                            created_at: new Date().toISOString()
+                        }]);
+                        setMessageContent('');
+                    }
+                };
+
+                if (!user) {
+                    return (
+                        <div className="flex items-center justify-center h-screen">
+                            <div className="bg-gray-800 p-6 rounded-lg w-full max-w-md">
+                                <h2 className="text-2xl mb-4">{view === 'login' ? 'Login' : 'Sign Up'}</h2>
+                                {view === 'signup' && (
+                                    <input
+                                        type="text"
+                                        placeholder="Username"
+                                        value={username}
+                                        onChange={(e) => setUsername(e.target.value)}
+                                        className="w-full p-2 mb-4 bg-gray-700 rounded"
+                                    />
+                                )}
+                                <input
+                                    type="email"
+                                    placeholder="Email"
+                                    value={email}
+                                    onChange={(e) => setEmail(e.target.value)}
+                                    className="w-full p-2 mb-4 bg-gray-700 rounded"
+                                />
+                                <input
+                                    type="password"
+                                    placeholder="Password"
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
+                                    className="w-full p-2 mb-4 bg-gray-700 rounded"
+                                />
+                                <button
+                                    onClick={view === 'login' ? handleLogin : handleSignup}
+                                    className="w-full bg-blue-600 p-2 rounded hover:bg-blue-700"
+                                >
+                                    {view === 'login' ? 'Login' : 'Sign Up'}
+                                </button>
+                                <p className="mt-4 text-center">
+                                    {view === 'login' ? "Don't have an account?" : 'Already have an account?'}
+                                    <button
+                                        onClick={() => setView(view === 'login' ? 'signup' : 'login')}
+                                        className="ml-2 text-blue-400 hover:underline"
+                                    >
+                                        {view === 'login' ? 'Sign Up' : 'Login'}
+                                    </button>
+                                </p>
+                            </div>
+                        </div>
+                    );
+                }
+
+                return (
+                    <div
+                        className="flex h-screen"
+                        style={{ backgroundImage: `url(${user.background_url})`, backgroundSize: 'cover' }}
+                    >
+                        <div className="w-1/4 bg-gray-800 p-4 flex flex-col">
+                            <div className="flex items-center mb-4">
+                                <img
+                                    src={user.pfp_url}
+                                    alt="Profile"
+                                    className="w-12 h-12 rounded-full mr-2"
+                                />
+                                <span>{user.username}</span>
+                            </div>
+                            <button
+                                onClick={() => setView('profile')}
+                                className="bg-blue-600 p-2 rounded mb-4 hover:bg-blue-700"
+                            >
+                                Edit Profile
+                            </button>
+                            <button
+                                onClick={handleLogout}
+                                className="bg-red-600 p-2 rounded mb-4 hover:bg-red-700"
+                            >
+                                Logout
+                            </button>
+                            <input
+                                type="text"
+                                placeholder="Add friend by username"
+                                value={friendUsername}
+                                onChange={(e) => setFriendUsername(e.target.value)}
+                                className="p-2 bg-gray-700 rounded mb-4"
+                            />
+                            <button
+                                onClick={handleSendFriendRequest}
+                                className="bg-green-600 p-2 rounded mb-4 hover:bg-green-700"
+                            >
+                                Send Friend Request
+                            </button>
+                            <h3 className="text-lg mb-2">Friend Requests</h3>
+                            {friendRequests.map((req) => (
+                                <div key={req.id} className="flex items-center justify-between mb-2">
+                                    <span>{req.sender.username}</span>
+                                    <div>
+                                        <button
+                                            onClick={() => handleFriendRequestAction(req.id, 'accepted')}
+                                            className="bg-green-600 px-2 py-1 rounded mr-2 hover:bg-green-700"
+                                        >
+                                            Accept
+                                        </button>
+                                        <button
+                                            onClick={() => handleFriendRequestAction(req.id, 'rejected')}
+                                            className="bg-red-600 px-2 py-1 rounded hover:bg-red-700"
+                                        >
+                                            Reject
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                            <h3 className="text-lg mb-2 mt-4">Friends</h3>
+                            {friends.map((friend) => (
+                                <div
+                                    key={friend.id}
+                                    onClick={() => { setSelectedFriend(friend); setView('chat'); }}
+                                    className="flex items-center mb-2 cursor-pointer hover:bg-gray-700 p-2 rounded"
+                                >
+                                    <img
+                                        src={friend.pfp_url}
+                                        alt="Friend"
+                                        className="w-10 h-10 rounded-full mr-2"
+                                    />
+                                    <span>{friend.username}</span>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="flex-1 flex flex-col">
+                            {view === 'profile' ? (
+                                <div className="p-6 bg-gray-800 m-4 rounded-lg">
+                                    <h2 className="text-2xl mb-4">Edit Profile</h2>
+                                    <input
+                                        type="text"
+                                        placeholder="Username"
+                                        value={username}
+                                        onChange={(e) => setUsername(e.target.value)}
+                                        className="w-full p-2 mb-4 bg-gray-700 rounded"
+                                    />
+                                    <input
+                                        type="file"
+                                        onChange={(e) => setPfpFile(e.target.files[0])}
+                                        className="w-full p-2 mb-4 bg-gray-700 rounded"
+                                    />
+                                    <input
+                                        type="text"
+                                        placeholder="Background Image URL"
+                                        value={backgroundUrl}
+                                        onChange={(e) => setBackgroundUrl(e.target.value)}
+                                        className="w-full p-2 mb-4 bg-gray-700 rounded"
+                                    />
+                                    <button
+                                        onClick={handleUpdateProfile}
+                                        className="bg-blue-600 p-2 rounded hover:bg-blue-700"
+                                    >
+                                        Save Profile
+                                    </button>
+                                    <button
+                                        onClick={() => setView('chat')}
+                                        className="bg-gray-600 p-2 rounded ml-2 hover:bg-gray-700"
+                                    >
+                                        Back
+                                    </button>
+                                </div>
+                            ) : selectedFriend ? (
+                                <>
+                                    <div className="p-4 bg-gray-800 flex items-center">
+                                        <img
+                                            src={selectedFriend.pfp_url}
+                                            alt="Friend"
+                                            className="w-10 h-10 rounded-full mr-2"
+                                        />
+                                        <span className="text-lg">{selectedFriend.username}</span>
+                                    </div>
+                                    <div className="flex-1 p-4 overflow-y-auto">
+                                        {messages.map((msg) => (
+                                            <div
+                                                key={msg.id}
+                                                className={`mb-4 flex ${msg.sender_id === user.id ? 'justify-end' : 'justify-start'}`}
+                                            >
+                                                <div
+                                                    className={`max-w-xs p-3 rounded-lg animate-bubble ${
+                                                        msg.sender_id === user.id
+                                                            ? 'bg-blue-600'
+                                                            : 'bg-gray-700'
+                                                    }`}
+                                                >
+                                                    {msg.content}
+                                                    <div className="text-xs mt-1 opacity-75">
+                                                        {new Date(msg.created_at).toLocaleTimeString()}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="p-4 bg-gray-800">
+                                        <div className="flex">
+                                            <input
+                                                type="text"
+                                                placeholder="Type a message..."
+                                                value={messageContent}
+                                                onChange={(e) => setMessageContent(e.target.value)}
+                                                onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                                                className="flex-1 p-2 bg-gray-700 rounded-l"
+                                            />
+                                            <button
+                                                onClick={handleSendMessage}
+                                                className="bg-blue-600 p-2 rounded-r hover:bg-blue-700"
+                                            >
+                                                Send
+                                            </button>
+                                        </div>
+                                    </div>
+                                </>
+                            ) : (
+                                <div className="flex-1 flex items-center justify-center">
+                                    <p>Select a friend to start chatting</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            };
+
+            const style = document.createElement('style');
+            style.textContent = `
+                @keyframes bubble {
+                    0% { transform: scale(0.8); opacity: 0; }
+                    100% { transform: scale(1); opacity: 1; }
+                }
+                .animate-bubble {
+                    animation: bubble 0.3s ease-out;
+                }
+            `;
+            document.head.appendChild(style);
+
+            ReactDOM.render(<App />, document.getElementById('root'));
+        </script>
+    </body>
+</html>
