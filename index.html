@@ -7,7 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.22.9/Babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.22.9/babel.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.44.4/dist/umd/supabase.min.js"></script>
 </head>
 <body class="bg-gray-900 text-white">
@@ -41,6 +41,8 @@
                             .eq('id', session.user.id)
                             .single();
                         setUser(userData);
+                        setUsername(userData.username);
+                        setBackgroundUrl(userData.background_url || '');
                         fetchFriends(session.user.id);
                         fetchFriendRequests(session.user.id);
                     }
@@ -56,7 +58,11 @@
                     }
                 });
 
-                return () => authListener.subscription.unsubscribe();
+                return () => {
+                    if (authListener && authListener.subscription) {
+                        authListener.subscription.unsubscribe();
+                    }
+                };
             }, []);
 
             React.useEffect(() => {
@@ -71,12 +77,14 @@
                         })
                         .subscribe();
 
-                    return () => supabase.removeChannel(channel);
+                    return () => {
+                        if (channel) supabase.removeChannel(channel);
+                    };
                 }
             }, [user]);
 
             React.useEffect(() => {
-                if (selectedFriend) {
+                if (selectedFriend && user) {
                     fetchMessages(user.id, selectedFriend.id);
                     const channel = supabase
                         .channel('messages')
@@ -87,9 +95,11 @@
                         })
                         .subscribe();
 
-                    return () => supabase.removeChannel(channel);
+                    return () => {
+                        if (channel) supabase.removeChannel(channel);
+                    };
                 }
-            }, [selectedFriend]);
+            }, [selectedFriend, user]);
 
             const fetchFriends = async (userId) => {
                 const { data } = await supabase
@@ -97,12 +107,20 @@
                     .select('sender_id, receiver_id')
                     .eq('status', 'accepted')
                     .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`);
-                const friendIds = data.map(req => req.sender_id === userId ? req.receiver_id : req.sender_id);
-                const { data: friendsData } = await supabase
-                    .from('users')
-                    .select('*')
-                    .in('id', friendIds);
-                setFriends(friendsData);
+                
+                if (data && data.length > 0) {
+                    const friendIds = data.map(req => req.sender_id === userId ? req.receiver_id : req.sender_id);
+                    const { data: friendsData } = await supabase
+                        .from('users')
+                        .select('*')
+                        .in('id', friendIds);
+                    
+                    if (friendsData) {
+                        setFriends(friendsData);
+                    }
+                } else {
+                    setFriends([]);
+                }
             };
 
             const fetchFriendRequests = async (userId) => {
@@ -111,7 +129,8 @@
                     .select('*, sender:users!sender_id(*), receiver:users!receiver_id(*)')
                     .eq('receiver_id', userId)
                     .eq('status', 'pending');
-                setFriendRequests(data);
+                
+                setFriendRequests(data || []);
             };
 
             const fetchMessages = async (userId, friendId) => {
@@ -121,54 +140,105 @@
                     .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
                     .or(`sender_id.eq.${friendId},receiver_id.eq.${friendId}`)
                     .order('created_at', { ascending: true });
-                setMessages(data.filter(msg => 
-                    (msg.sender_id === userId && msg.receiver_id === friendId) ||
-                    (msg.sender_id === friendId && msg.receiver_id === userId)
-                ));
+                
+                if (data) {
+                    setMessages(data.filter(msg => 
+                        (msg.sender_id === userId && msg.receiver_id === friendId) ||
+                        (msg.sender_id === friendId && msg.receiver_id === userId)
+                    ));
+                } else {
+                    setMessages([]);
+                }
             };
 
             const handleSignup = async () => {
+                if (!email || !password || !username) {
+                    alert('Please fill in all fields');
+                    return;
+                }
+
                 const { data, error } = await supabase.auth.signUp({
                     email,
                     password,
                     options: { data: { username } }
                 });
+                
                 if (error) {
                     alert(error.message);
                     return;
                 }
-                await supabase.from('users').insert({
-                    id: data.user.id,
-                    email,
-                    username
-                });
-                setView('login');
+                
+                if (data.user) {
+                    await supabase.from('users').insert({
+                        id: data.user.id,
+                        email,
+                        username
+                    });
+                    setView('login');
+                    alert('Signup successful! Please log in.');
+                }
             };
 
             const handleLogin = async () => {
+                if (!email || !password) {
+                    alert('Please enter both email and password');
+                    return;
+                }
+
                 const { error } = await supabase.auth.signInWithPassword({ email, password });
                 if (error) alert(error.message);
             };
 
             const handleLogout = async () => {
                 await supabase.auth.signOut();
+                setUser(null);
+                setView('login');
             };
 
             const handleSendFriendRequest = async () => {
+                if (!friendUsername.trim()) {
+                    alert('Please enter a username');
+                    return;
+                }
+
                 const { data: friend } = await supabase
                     .from('users')
                     .select('id')
                     .eq('username', friendUsername)
                     .single();
+                
                 if (!friend) {
                     alert('User not found');
                     return;
                 }
+
+                // Check if we're trying to add ourselves
+                if (friend.id === user.id) {
+                    alert('You cannot add yourself as a friend');
+                    return;
+                }
+
+                // Check if request already exists
+                const { data: existingRequest } = await supabase
+                    .from('friend_requests')
+                    .select('*')
+                    .or(`and(sender_id.eq.${user.id},receiver_id.eq.${friend.id}),and(sender_id.eq.${friend.id},receiver_id.eq.${user.id})`)
+                    .single();
+
+                if (existingRequest) {
+                    alert('A friend request already exists between you and this user');
+                    return;
+                }
+
                 const { error } = await supabase
                     .from('friend_requests')
                     .insert({ sender_id: user.id, receiver_id: friend.id });
+                
                 if (error) alert(error.message);
-                else setFriendUsername('');
+                else {
+                    alert('Friend request sent!');
+                    setFriendUsername('');
+                }
             };
 
             const handleFriendRequestAction = async (requestId, action) => {
@@ -176,160 +246,183 @@
                     .from('friend_requests')
                     .update({ status: action })
                     .eq('id', requestId);
+                
                 fetchFriendRequests(user.id);
                 if (action === 'accepted') fetchFriends(user.id);
             };
 
             const handleUpdateProfile = async () => {
-    let pfpUrl = user.pfp_url; // Default to current pfp_url
-    if (pfpFile) {
-        try {
-            const { data, error: uploadError } = await supabase.storage
-                .from('pfps')
-                .upload(`${user.id}/${pfpFile.name}`, pfpFile, { upsert: true });
-            if (uploadError) {
-                alert('Upload failed: ' + uploadError.message);
-                return;
-            }
-            pfpUrl = supabase.storage.from('pfps').getPublicUrl(`${user.id}/${pfpFile.name}`).data.publicUrl;
-        } catch (err) {
-            alert('Error uploading file: ' + err.message);
-            return;
-        }
-    }
-
-    try {
-        const { error } = await supabase
-            .from('users')
-            .update({ 
-                username, 
-                pfp_url: pfpUrl || user.pfp_url, 
-                background_url: backgroundUrl || user.background_url 
-            })
-            .eq('id', user.id);
-        if (error) {
-            alert('Update failed: ' + error.message);
-            return;
-        }
-        setUser({ 
-            ...user, 
-            username, 
-            pfp_url: pfpUrl || user.pfp_url, 
-            background_url: backgroundUrl || user.background_url 
-        });
-        setPfpFile(null);
-    } catch (err) {
-        alert('Error updating profile: ' + err.message);
-    }
-};
-                const handleSendMessage = async () => {
-                    if (!messageContent.trim()) return;
-                    const { error } = await supabase
-                        .from('messages')
-                        .insert({ sender_id: user.id, receiver_id: selectedFriend.id, content: messageContent });
-                    if (error) alert(error.message);
-                    else {
-                        setMessages([...messages, {
-                            sender_id: user.id,
-                            receiver_id: selectedFriend.id,
-                            content: messageContent,
-                            created_at: new Date().toISOString()
-                        }]);
-                        setMessageContent('');
-                    }
-                };
-
-                if (!user) {
-                    return (
-                        <div className="flex items-center justify-center h-screen">
-                            <div className="bg-gray-800 p-6 rounded-lg w-full max-w-md">
-                                <h2 className="text-2xl mb-4">{view === 'login' ? 'Login' : 'Sign Up'}</h2>
-                                {view === 'signup' && (
-                                    <input
-                                        type="text"
-                                        placeholder="Username"
-                                        value={username}
-                                        onChange={(e) => setUsername(e.target.value)}
-                                        className="w-full p-2 mb-4 bg-gray-700 rounded"
-                                    />
-                                )}
-                                <input
-                                    type="email"
-                                    placeholder="Email"
-                                    value={email}
-                                    onChange={(e) => setEmail(e.target.value)}
-                                    className="w-full p-2 mb-4 bg-gray-700 rounded"
-                                />
-                                <input
-                                    type="password"
-                                    placeholder="Password"
-                                    value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
-                                    className="w-full p-2 mb-4 bg-gray-700 rounded"
-                                />
-                                <button
-                                    onClick={view === 'login' ? handleLogin : handleSignup}
-                                    className="w-full bg-blue-600 p-2 rounded hover:bg-blue-700"
-                                >
-                                    {view === 'login' ? 'Login' : 'Sign Up'}
-                                </button>
-                                <p className="mt-4 text-center">
-                                    {view === 'login' ? "Don't have an account?" : 'Already have an account?'}
-                                    <button
-                                        onClick={() => setView(view === 'login' ? 'signup' : 'login')}
-                                        className="ml-2 text-blue-400 hover:underline"
-                                    >
-                                        {view === 'login' ? 'Sign Up' : 'Login'}
-                                    </button>
-                                </p>
-                            </div>
-                        </div>
-                    );
+                if (!username.trim()) {
+                    alert('Username cannot be empty');
+                    return;
                 }
 
+                let pfpUrl = user.pfp_url || '';
+
+                if (pfpFile) {
+                    const fileExt = pfpFile.name.split('.').pop();
+                    const fileName = `${user.id}-${Date.now()}.${fileExt}`;
+                    
+                    const { data, error: uploadError } = await supabase.storage
+                        .from('pfps')
+                        .upload(fileName, pfpFile);
+                    
+                    if (uploadError) {
+                        alert(`Error uploading file: ${uploadError.message}`);
+                    } else if (data) {
+                        pfpUrl = supabase.storage.from('pfps').getPublicUrl(fileName).data.publicUrl;
+                    }
+                }
+
+                const { error } = await supabase
+                    .from('users')
+                    .update({ 
+                        username, 
+                        pfp_url: pfpUrl,
+                        background_url: backgroundUrl || user.background_url || ''
+                    })
+                    .eq('id', user.id);
+                
+                if (error) {
+                    alert(`Error updating profile: ${error.message}`);
+                } else {
+                    setUser({ 
+                        ...user, 
+                        username, 
+                        pfp_url: pfpUrl,
+                        background_url: backgroundUrl || user.background_url || ''
+                    });
+                    setPfpFile(null);
+                    setView('chat');
+                    alert('Profile updated successfully!');
+                }
+            };
+
+            const handleSendMessage = async () => {
+                if (!messageContent.trim() || !selectedFriend) return;
+                
+                const { data, error } = await supabase
+                    .from('messages')
+                    .insert({ 
+                        sender_id: user.id, 
+                        receiver_id: selectedFriend.id, 
+                        content: messageContent 
+                    });
+                
+                if (error) {
+                    alert(`Error sending message: ${error.message}`);
+                } else {
+                    // Optimistically add the message to the UI
+                    const newMessage = {
+                        id: Date.now().toString(), // Temporary ID
+                        sender_id: user.id,
+                        receiver_id: selectedFriend.id,
+                        content: messageContent,
+                        created_at: new Date().toISOString()
+                    };
+                    
+                    setMessages(prev => [...prev, newMessage]);
+                    setMessageContent('');
+                }
+            };
+
+            if (!user) {
                 return (
-                    <div
-                        className="flex h-screen"
-                        style={{ backgroundImage: `url(${user.background_url})`, backgroundSize: 'cover' }}
-                    >
-                        <div className="w-1/4 bg-gray-800 p-4 flex flex-col">
-                            <div className="flex items-center mb-4">
-                                <img
-                                    src={user.pfp_url}
-                                    alt="Profile"
-                                    className="w-12 h-12 rounded-full mr-2"
+                    <div className="flex items-center justify-center h-screen">
+                        <div className="bg-gray-800 p-6 rounded-lg w-full max-w-md">
+                            <h2 className="text-2xl mb-4">{view === 'login' ? 'Login' : 'Sign Up'}</h2>
+                            {view === 'signup' && (
+                                <input
+                                    type="text"
+                                    placeholder="Username"
+                                    value={username}
+                                    onChange={(e) => setUsername(e.target.value)}
+                                    className="w-full p-2 mb-4 bg-gray-700 rounded"
                                 />
-                                <span>{user.username}</span>
-                            </div>
-                            <button
-                                onClick={() => setView('profile')}
-                                className="bg-blue-600 p-2 rounded mb-4 hover:bg-blue-700"
-                            >
-                                Edit Profile
-                            </button>
-                            <button
-                                onClick={handleLogout}
-                                className="bg-red-600 p-2 rounded mb-4 hover:bg-red-700"
-                            >
-                                Logout
-                            </button>
+                            )}
                             <input
-                                type="text"
-                                placeholder="Add friend by username"
-                                value={friendUsername}
-                                onChange={(e) => setFriendUsername(e.target.value)}
-                                className="p-2 bg-gray-700 rounded mb-4"
+                                type="email"
+                                placeholder="Email"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                className="w-full p-2 mb-4 bg-gray-700 rounded"
+                            />
+                            <input
+                                type="password"
+                                placeholder="Password"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                className="w-full p-2 mb-4 bg-gray-700 rounded"
                             />
                             <button
-                                onClick={handleSendFriendRequest}
-                                className="bg-green-600 p-2 rounded mb-4 hover:bg-green-700"
+                                onClick={view === 'login' ? handleLogin : handleSignup}
+                                className="w-full bg-blue-600 p-2 rounded hover:bg-blue-700"
                             >
-                                Send Friend Request
+                                {view === 'login' ? 'Login' : 'Sign Up'}
                             </button>
-                            <h3 className="text-lg mb-2">Friend Requests</h3>
-                            {friendRequests.map((req) => (
+                            <p className="mt-4 text-center">
+                                {view === 'login' ? "Don't have an account?" : 'Already have an account?'}
+                                <button
+                                    onClick={() => setView(view === 'login' ? 'signup' : 'login')}
+                                    className="ml-2 text-blue-400 hover:underline"
+                                >
+                                    {view === 'login' ? 'Sign Up' : 'Login'}
+                                </button>
+                            </p>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div
+                    className="flex h-screen"
+                    style={{ 
+                        backgroundImage: user.background_url ? `url(${user.background_url})` : 'none',
+                        backgroundSize: 'cover', 
+                        backgroundColor: user.background_url ? undefined : '#111827'
+                    }}
+                >
+                    <div className="w-1/4 bg-gray-800 p-4 flex flex-col">
+                        <div className="flex items-center mb-4">
+                            <img
+                                src={user.pfp_url || 'https://via.placeholder.com/150'}
+                                alt="Profile"
+                                className="w-12 h-12 rounded-full mr-2"
+                                onError={(e) => { e.target.src = 'https://via.placeholder.com/150' }}
+                            />
+                            <span>{user.username}</span>
+                        </div>
+                        <button
+                            onClick={() => setView('profile')}
+                            className="bg-blue-600 p-2 rounded mb-4 hover:bg-blue-700"
+                        >
+                            Edit Profile
+                        </button>
+                        <button
+                            onClick={handleLogout}
+                            className="bg-red-600 p-2 rounded mb-4 hover:bg-red-700"
+                        >
+                            Logout
+                        </button>
+                        <input
+                            type="text"
+                            placeholder="Add friend by username"
+                            value={friendUsername}
+                            onChange={(e) => setFriendUsername(e.target.value)}
+                            className="p-2 bg-gray-700 rounded mb-4"
+                        />
+                        <button
+                            onClick={handleSendFriendRequest}
+                            className="bg-green-600 p-2 rounded mb-4 hover:bg-green-700"
+                        >
+                            Send Friend Request
+                        </button>
+                        <h3 className="text-lg mb-2">Friend Requests</h3>
+                        {friendRequests.length > 0 ? (
+                            friendRequests.map((req) => (
                                 <div key={req.id} className="flex items-center justify-between mb-2">
-                                    <span>{req.sender.username}</span>
+                                    <span>{req.sender?.username || 'Unknown User'}</span>
                                     <div>
                                         <button
                                             onClick={() => handleFriendRequestAction(req.id, 'accepted')}
@@ -345,46 +438,61 @@
                                         </button>
                                     </div>
                                 </div>
-                            ))}
-                            <h3 className="text-lg mb-2 mt-4">Friends</h3>
-                            {friends.map((friend) => (
+                            ))
+                        ) : (
+                            <p className="text-sm text-gray-400">No pending requests</p>
+                        )}
+                        <h3 className="text-lg mb-2 mt-4">Friends</h3>
+                        {friends.length > 0 ? (
+                            friends.map((friend) => (
                                 <div
                                     key={friend.id}
                                     onClick={() => { setSelectedFriend(friend); setView('chat'); }}
-                                    className="flex items-center mb-2 cursor-pointer hover:bg-gray-700 p-2 rounded"
+                                    className={`flex items-center mb-2 cursor-pointer hover:bg-gray-700 p-2 rounded ${
+                                        selectedFriend && selectedFriend.id === friend.id ? 'bg-gray-700' : ''
+                                    }`}
                                 >
                                     <img
-                                        src={friend.pfp_url}
+                                        src={friend.pfp_url || 'https://via.placeholder.com/150'}
                                         alt="Friend"
                                         className="w-10 h-10 rounded-full mr-2"
+                                        onError={(e) => { e.target.src = 'https://via.placeholder.com/150' }}
                                     />
                                     <span>{friend.username}</span>
                                 </div>
-                            ))}
-                        </div>
-                        <div className="flex-1 flex flex-col">
-                            {view === 'profile' ? (
-                                <div className="p-6 bg-gray-800 m-4 rounded-lg">
-                                    <h2 className="text-2xl mb-4">Edit Profile</h2>
-                                    <input
-                                        type="text"
-                                        placeholder="Username"
-                                        value={username}
-                                        onChange={(e) => setUsername(e.target.value)}
-                                        className="w-full p-2 mb-4 bg-gray-700 rounded"
-                                    />
+                            ))
+                        ) : (
+                            <p className="text-sm text-gray-400">No friends yet</p>
+                        )}
+                    </div>
+                    <div className="flex-1 flex flex-col">
+                        {view === 'profile' ? (
+                            <div className="p-6 bg-gray-800 m-4 rounded-lg">
+                                <h2 className="text-2xl mb-4">Edit Profile</h2>
+                                <input
+                                    type="text"
+                                    placeholder="Username"
+                                    value={username}
+                                    onChange={(e) => setUsername(e.target.value)}
+                                    className="w-full p-2 mb-4 bg-gray-700 rounded"
+                                />
+                                <div className="mb-4">
+                                    <label className="block mb-2">Profile Picture</label>
                                     <input
                                         type="file"
-                                        onChange={(e) => setPfpFile(e.target.files[0])}
-                                        className="w-full p-2 mb-4 bg-gray-700 rounded"
+                                        accept="image/*"
+                                        onChange={(e) => e.target.files && setPfpFile(e.target.files[0])}
+                                        className="w-full p-2 bg-gray-700 rounded"
                                     />
-                                    <input
-                                        type="text"
-                                        placeholder="Background Image URL"
-                                        value={backgroundUrl}
-                                        onChange={(e) => setBackgroundUrl(e.target.value)}
-                                        className="w-full p-2 mb-4 bg-gray-700 rounded"
-                                    />
+                                </div>
+                                <input
+                                    type="text"
+                                    placeholder="Background Image URL"
+                                    value={backgroundUrl}
+                                    onChange={(e) => setBackgroundUrl(e.target.value)}
+                                    className="w-full p-2 mb-4 bg-gray-700 rounded"
+                                />
+                                <div className="flex">
                                     <button
                                         onClick={handleUpdateProfile}
                                         className="bg-blue-600 p-2 rounded hover:bg-blue-700"
@@ -395,23 +503,26 @@
                                         onClick={() => setView('chat')}
                                         className="bg-gray-600 p-2 rounded ml-2 hover:bg-gray-700"
                                     >
-                                        Back
+                                        Cancel
                                     </button>
                                 </div>
-                            ) : selectedFriend ? (
-                                <>
-                                    <div className="p-4 bg-gray-800 flex items-center">
-                                        <img
-                                            src={selectedFriend.pfp_url}
-                                            alt="Friend"
-                                            className="w-10 h-10 rounded-full mr-2"
-                                        />
-                                        <span className="text-lg">{selectedFriend.username}</span>
-                                    </div>
-                                    <div className="flex-1 p-4 overflow-y-auto">
-                                        {messages.map((msg) => (
+                            </div>
+                        ) : selectedFriend ? (
+                            <>
+                                <div className="p-4 bg-gray-800 flex items-center">
+                                    <img
+                                        src={selectedFriend.pfp_url || 'https://via.placeholder.com/150'}
+                                        alt="Friend"
+                                        className="w-10 h-10 rounded-full mr-2"
+                                        onError={(e) => { e.target.src = 'https://via.placeholder.com/150' }}
+                                    />
+                                    <span className="text-lg">{selectedFriend.username}</span>
+                                </div>
+                                <div className="flex-1 p-4 overflow-y-auto bg-gray-900 bg-opacity-70">
+                                    {messages.length > 0 ? (
+                                        messages.map((msg, index) => (
                                             <div
-                                                key={msg.id}
+                                                key={msg.id || index}
                                                 className={`mb-4 flex ${msg.sender_id === user.id ? 'justify-end' : 'justify-start'}`}
                                             >
                                                 <div
@@ -427,50 +538,55 @@
                                                     </div>
                                                 </div>
                                             </div>
-                                        ))}
-                                    </div>
-                                    <div className="p-4 bg-gray-800">
-                                        <div className="flex">
-                                            <input
-                                                type="text"
-                                                placeholder="Type a message..."
-                                                value={messageContent}
-                                                onChange={(e) => setMessageContent(e.target.value)}
-                                                onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-                                                className="flex-1 p-2 bg-gray-700 rounded-l"
-                                            />
-                                            <button
-                                                onClick={handleSendMessage}
-                                                className="bg-blue-600 p-2 rounded-r hover:bg-blue-700"
-                                            >
-                                                Send
-                                            </button>
+                                        ))
+                                    ) : (
+                                        <div className="flex items-center justify-center h-full text-gray-400">
+                                            <p>No messages yet. Start a conversation!</p>
                                         </div>
-                                    </div>
-                                </>
-                            ) : (
-                                <div className="flex-1 flex items-center justify-center">
-                                    <p>Select a friend to start chatting</p>
+                                    )}
                                 </div>
-                            )}
-                        </div>
+                                <div className="p-4 bg-gray-800">
+                                    <div className="flex">
+                                        <input
+                                            type="text"
+                                            placeholder="Type a message..."
+                                            value={messageContent}
+                                            onChange={(e) => setMessageContent(e.target.value)}
+                                            onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                                            className="flex-1 p-2 bg-gray-700 rounded-l"
+                                        />
+                                        <button
+                                            onClick={handleSendMessage}
+                                            className="bg-blue-600 p-2 rounded-r hover:bg-blue-700"
+                                        >
+                                            Send
+                                        </button>
+                                    </div>
+                                </div>
+                            </>
+                        ) : (
+                            <div className="flex-1 flex items-center justify-center bg-gray-900 bg-opacity-70">
+                                <p>Select a friend to start chatting</p>
+                            </div>
+                        )}
                     </div>
-                );
-            };
+                </div>
+            );
+        };
 
-            const style = document.createElement('style');
-            style.textContent = `
-                @keyframes bubble {
-                    0% { transform: scale(0.8); opacity: 0; }
-                    100% { transform: scale(1); opacity: 1; }
-                }
-                .animate-bubble {
-                    animation: bubble 0.3s ease-out;
-                }
-            `;
-            document.head.appendChild(style);
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes bubble {
+                0% { transform: scale(0.8); opacity: 0; }
+                100% { transform: scale(1); opacity: 1; }
+            }
+            .animate-bubble {
+                animation: bubble 0.3s ease-out;
+            }
+        `;
+        document.head.appendChild(style);
 
-            ReactDOM.render(<App />, document.getElementById('root'));
-        </script>
-    </body>
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
 </html>
